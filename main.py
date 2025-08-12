@@ -1,78 +1,77 @@
+# main.py
 import psutil
 import time
 import pandas as pd
 import streamlit as st
-import plotly.express as px
+from sklearn.linear_model import LinearRegression
+import numpy as np
+from datetime import datetime
 
-# --------------------------
-# Page Configuration
-# --------------------------
-st.set_page_config(page_title="AI System Performance Optimizer",
-                   layout="wide")
-
+st.set_page_config(page_title="AI System Performance Optimizer", layout="wide")
 st.title("⚡ AI System Performance Optimizer")
-st.markdown("Live system monitoring for CPU, RAM, Disk, and Network usage.")
+st.markdown("Real-time monitoring, bottleneck prediction, and optimization suggestions.")
 
-# --------------------------
-# Data Storage
-# --------------------------
-data = {
-    "Time": [],
-    "CPU (%)": [],
-    "RAM (%)": [],
-    "Disk (%)": [],
-    "Upload (KB/s)": [],
-    "Download (KB/s)": []
-}
+# Initialize CSV logging file
+LOG_FILE = "system_metrics.csv"
+if not pd.io.common.file_exists(LOG_FILE):
+    pd.DataFrame(columns=["Time", "CPU_Usage", "RAM_Usage", "Disk_Usage"]).to_csv(LOG_FILE, index=False)
 
-# --------------------------
-# Main Monitoring Loop
-# --------------------------
-refresh_rate = st.sidebar.slider("Refresh rate (seconds)", 1, 10, 2)
-duration = st.sidebar.number_input("Monitoring duration (seconds)", 10, 300, 60)
+# Function to log system metrics
+def log_metrics(cpu, ram, disk):
+    df = pd.read_csv(LOG_FILE)
+    new_data = {"Time": datetime.now().strftime("%H:%M:%S"),
+                "CPU_Usage": cpu,
+                "RAM_Usage": ram,
+                "Disk_Usage": disk}
+    df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
+    df.to_csv(LOG_FILE, index=False)
 
-start_time = time.time()
-prev_net = psutil.net_io_counters()
+# Function to predict bottleneck using linear regression
+def predict_threshold(metric_list, threshold=80):
+    if len(metric_list) < 5:
+        return None
+    X = np.arange(len(metric_list)).reshape(-1, 1)
+    y = np.array(metric_list)
+    model = LinearRegression()
+    model.fit(X, y)
+    future_time = np.array([[len(metric_list) + 5]])
+    predicted = model.predict(future_time)[0]
+    return predicted if predicted >= threshold else None
 
-status_placeholder = st.empty()
-graph_placeholder = st.empty()
+# Real-time dashboard loop
+cpu_list, ram_list, disk_list = [], [], []
 
-while time.time() - start_time < duration:
-    current_time = time.strftime("%H:%M:%S")
+placeholder = st.empty()
 
-    cpu = psutil.cpu_percent(interval=1)
+while True:
+    cpu = psutil.cpu_percent()
     ram = psutil.virtual_memory().percent
-    disk = psutil.disk_usage("/").percent
+    disk = psutil.disk_usage('/').percent
 
-    net = psutil.net_io_counters()
-    upload_speed = (net.bytes_sent - prev_net.bytes_sent) / 1024
-    download_speed = (net.bytes_recv - prev_net.bytes_recv) / 1024
-    prev_net = net
+    cpu_list.append(cpu)
+    ram_list.append(ram)
+    disk_list.append(disk)
 
-    # Append data
-    data["Time"].append(current_time)
-    data["CPU (%)"].append(cpu)
-    data["RAM (%)"].append(ram)
-    data["Disk (%)"].append(disk)
-    data["Upload (KB/s)"].append(upload_speed)
-    data["Download (KB/s)"].append(download_speed)
+    log_metrics(cpu, ram, disk)
 
-    df = pd.DataFrame(data)
+    # Prediction
+    cpu_alert = predict_threshold(cpu_list)
+    ram_alert = predict_threshold(ram_list)
 
-    # Status display
-    status_placeholder.markdown(
-        f"⏳ Monitoring...** {len(df)} data points collected out of {duration // refresh_rate}"
-    )
+    with placeholder.container():
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🖥 CPU Usage (%)", f"{cpu}%")
+        col2.metric("💾 RAM Usage (%)", f"{ram}%")
+        col3.metric("📀 Disk Usage (%)", f"{disk}%")
 
-    # Graphs
-    fig = px.line(df, x="Time", y=["CPU (%)", "RAM (%)", "Disk (%)"],
-                  title="System Resource Usage")
-    fig_net = px.line(df, x="Time", y=["Upload (KB/s)", "Download (KB/s)"],
-                      title="Network Usage")
+        st.subheader("📊 Usage Trends")
+        df = pd.read_csv(LOG_FILE)
+        st.line_chart(df.set_index("Time"))
 
-    graph_placeholder.plotly_chart(fig, use_container_width=True)
-    graph_placeholder.plotly_chart(fig_net, use_container_width=True)
+        st.subheader("🔮 AI Predictions & Suggestions")
+        if cpu_alert:
+            st.warning(f"⚠ CPU may exceed 80% soon (Predicted: {cpu_alert:.2f}%) - Close heavy apps.")
+        if ram_alert:
+            st.warning(f"⚠ RAM may exceed 80% soon (Predicted: {ram_alert:.2f}%) - Free up memory.")
 
-    time.sleep(refresh_rate)
-
-st.success("✅ Monitoring Complete!")
+    time.sleep(2)
